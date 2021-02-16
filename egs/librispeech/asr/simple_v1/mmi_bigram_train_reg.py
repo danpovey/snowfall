@@ -315,20 +315,6 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
 
 
 
-def describe(model: nn.Module):
-    print('=' * 80)
-    print('Model parameters summary:')
-    print('=' * 80)
-    total = 0
-    for name, param in model.named_parameters():
-        num_params = param.numel()
-        total += num_params
-        print(f'* {name}: {num_params:>{80 - len(name) - 4}}')
-    print('=' * 80)
-    print('Total:', total)
-    print('=' * 80)
-
-
 def main():
     fix_random_seed(42)
 
