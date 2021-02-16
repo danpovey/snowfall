@@ -28,6 +28,7 @@ from snowfall.common import setup_logger
 from snowfall.common import describe
 from snowfall.models import AcousticModel
 from snowfall.models.tdnn_lstm import TdnnLstm1b
+from snowfall.models.regularize import RegularizeRecord, RegularizeGlobal
 from snowfall.training.diagnostics import measure_gradient_norms, optim_step_and_measure_param_change
 from snowfall.training.mmi_graph import MmiTrainingGraphCompiler
 from snowfall.training.mmi_graph import create_bigram_phone_lm
@@ -193,7 +194,9 @@ def get_validation_objf(dataloader: torch.utils.data.DataLoader,
 
 def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                     valid_dataloader: torch.utils.data.DataLoader,
-                    model: AcousticModel, P: k2.Fsa,
+                    model: AcousticModel,
+                    regularize_global: RegularizeGlobal
+                    P: k2.Fsa,
                     device: torch.device,
                     graph_compiler: MmiTrainingGraphCompiler,
                     optimizer: torch.optim.Optimizer,
@@ -216,6 +219,36 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
         assert P.is_cpu
         assert P.requires_grad is True
 
+        if batch_idx % regularize_global.interval == 0:
+            buf_idx = (regularize_global.interval / batch_idx) % regularize_global.buffer_size
+
+            new_record = RegularizeRecord(regularize_global.scale, model, batch)
+            new_record.set_store_mode()
+            # Evaluate the objf, not for training but just to record the
+            # activation values for later comparison
+            _ = get_objf(
+                batch=batch,
+                model=model,
+                P=P,
+                device=device,
+                graph_compiler=graph_compiler,
+                is_training=False)
+
+            cur_record = regularize_global.buf[buf_idx]
+            regularize_global.buf[buf_idx] = new_record
+            if cur_record == None:
+                # This will happen only at the start of training.
+                continue
+
+            # when we do get_objf() below we'll include a regularization part in the derivative
+            # We overwrite `batch` with the batch we stored the last time we encountered this
+            # value of `buf_idx`.
+            cur_record.set_regularize_mode()
+            batch = cur_record.batch
+        else:
+            regularize_global.set_normal_mode()
+
+        # This part is the same as normal training.
         curr_batch_objf, curr_batch_frames, curr_batch_all_frames = get_objf(
             batch=batch,
             model=model,
@@ -276,13 +309,30 @@ def train_one_epoch(dataloader: torch.utils.data.DataLoader,
                                  global_batch_idx_train)
             model.write_tensorboard_diagnostics(tb_writer, global_step=global_batch_idx_train)
         prev_timestamp = datetime.now()
+    # the next line is in case on the last minibatch we set some other mode.
+    regularize_global.set_normal_mode()
     return total_objf / total_frames, valid_average_objf, global_batch_idx_train
+
+
+
+def describe(model: nn.Module):
+    print('=' * 80)
+    print('Model parameters summary:')
+    print('=' * 80)
+    total = 0
+    for name, param in model.named_parameters():
+        num_params = param.numel()
+        total += num_params
+        print(f'* {name}: {num_params:>{80 - len(name) - 4}}')
+    print('=' * 80)
+    print('Total:', total)
+    print('=' * 80)
 
 
 def main():
     fix_random_seed(42)
 
-    exp_dir = f'exp-lstm-adam-mmi-bigram-musan'
+    exp_dir = f'exp-lstm-adam-mmi-bigram-musan-reg'
     setup_logger('{}/log/log-train'.format(exp_dir))
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard')
 
@@ -320,6 +370,7 @@ def main():
     cuts_musan = CutSet.from_json(feature_dir / 'cuts_musan.json.gz')
 
     logging.info("About to create train dataset")
+<<<<<<< HEAD
     train = K2SpeechRecognitionDataset(
         cuts_train,
         cut_transforms=[
@@ -361,9 +412,22 @@ def main():
     logging.info("About to create model")
     device_id = 0
     device = torch.device('cuda', device_id)
-    model = TdnnLstm1b(num_features=40,
-                       num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
-                       subsampling_factor=3)
+    model = TdnnLstm1b2(num_features=40,
+                        num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
+                        subsampling_factor=3)
+    # Parameters of regularization.  Caution: this will interact with the
+    # regularize_interval, since regularization is done only that often.
+    regularize_scale = 1.0e-04
+    # do regularization every 10 minibatches
+    regularize_interval = 10
+    # the "delay" of the regularization is regularize_interval * regularize_buffer_size.
+    regularize_buffer_size = 10
+
+    regularize_global = RegularizeGlobal(model, regularize_scale,
+                                         regularize_interval,
+                                         regularize_buffer_size)
+
+
     model.P_scores = nn.Parameter(P.scores.clone(), requires_grad=True)
 
     start_epoch = 0
@@ -430,6 +494,7 @@ def main():
             dataloader=train_dl,
             valid_dataloader=valid_dl,
             model=model,
+            regularize_global=regularize_global,
             P=P,
             device=device,
             graph_compiler=graph_compiler,
