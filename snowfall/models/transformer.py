@@ -11,6 +11,7 @@ from torch import Tensor, nn
 
 import k2
 from snowfall.models import AcousticModel
+from snowfall.models.fullnorm import FullNorm
 from snowfall.common import get_texts
 
 
@@ -30,7 +31,7 @@ class Transformer(AcousticModel):
     """
 
     def __init__(self, num_features: int, num_classes: int, subsampling_factor: int = 4,
-                 d_model: int = 256, nhead: int = 4, dim_feedforward: int = 2048, 
+                 d_model: int = 256, nhead: int = 4, dim_feedforward: int = 2048,
                  num_encoder_layers: int = 12, num_decoder_layers: int = 6,
                  dropout: float = 0.1, normalize_before: bool = True) -> None:
         super().__init__()
@@ -39,7 +40,7 @@ class Transformer(AcousticModel):
         self.subsampling_factor = subsampling_factor
         if subsampling_factor != 4:
             raise NotImplementedError("Support only 'subsampling_factor=4'.")
-        
+
         self.encoder_embed = Conv2dSubsampling(num_features, d_model)
         self.encoder_pos = PositionalEncoding(d_model, dropout)
 
@@ -77,7 +78,7 @@ class Transformer(AcousticModel):
             self.decoder_criterion = LabelSmoothingLoss(self.decoder_num_class)
         else:
             self.decoder_criterion = None
-        
+
     def forward(self, x: Tensor, supervision: Optional[Dict] = None) -> Tensor:
         """
         Args:
@@ -99,23 +100,23 @@ class Transformer(AcousticModel):
         Args:
             x: Tensor of dimension (batch_size, num_features, input_length).
             supervision_segments: Supervison in lhotse format, including 'sequence_idx',
-                                    'start_frame', and 'num_frames'. 
+                                    'start_frame', and 'num_frames'.
 
         Returns:
             Tensor: Predictor tensor of dimension (input_length, batch_size, d_model).
             Tensor: Mask tensor of dimension (batch_size, input_length)
         """
         x = x.permute(0, 2, 1) # (B, F, T) -> (B, T, F)
-        
+
         x = self.encoder_embed(x)
         x = self.encoder_pos(x)
         x = x.permute(1, 0, 2) # (B, T, F) -> (T, B, F)
         mask = encoder_padding_mask(supervision_segments)
         mask = mask.to(x.device) if mask != None else None
         x = self.encoder(x, src_key_padding_mask = mask) # (T, B, F)
-        
+
         return x, mask
-    
+
     def encoder_output(self, x: Tensor) -> Tensor:
         """
         Args:
@@ -134,7 +135,7 @@ class Transformer(AcousticModel):
             x: Tensor of dimension (input_length, batch_size, d_model).
             encoder_mask: Mask tensor of dimension (batch_size, input_length)
             supervision: Supervison in lhotse format, get from batch['supervisions']
-            graph_compiler: use graph_compiler.L_inv (Its labels are words, while its aux_labels are phones) 
+            graph_compiler: use graph_compiler.L_inv (Its labels are words, while its aux_labels are phones)
                             , graph_compiler.words and graph_compiler.oov
 
         Returns:
@@ -150,7 +151,7 @@ class Transformer(AcousticModel):
         tgt_key_padding_mask = decoder_padding_mask(ys_in_pad)
 
         tgt = self.decoder_embed(ys_in_pad) # (B, T) -> (B, T, F)
-        tgt = self.decoder_pos(tgt) 
+        tgt = self.decoder_pos(tgt)
         tgt = tgt.permute(1, 0, 2) # (B, T, F) -> (T, B, F)
         pred_pad = self.decoder(tgt=tgt,
                                 memory=x,
@@ -163,11 +164,11 @@ class Transformer(AcousticModel):
         decoder_loss = self.decoder_criterion(pred_pad, ys_out_pad)
 
         return decoder_loss
-     
-    
+
+
 class TransformerEncoderLayer(nn.Module):
     """
-    Modified from torch.nn.TransformerEncoderLayer. Add support of normalize_before, 
+    Modified from torch.nn.TransformerEncoderLayer. Add support of normalize_before,
     i.e., use layer_norm before the first block.
 
     Args:
@@ -193,7 +194,9 @@ class TransformerEncoderLayer(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.linear2 = nn.Linear(dim_feedforward, d_model)
 
-        self.norm1 = nn.LayerNorm(d_model)
+        self.norm1 = nn.LayerNorm(d_model, elementwise_affine=False)
+        self.fullnorm1 = FullNorm(d_model)
+
         self.norm2 = nn.LayerNorm(d_model)
         self.dropout1 = nn.Dropout(dropout)
         self.dropout2 = nn.Dropout(dropout)
@@ -224,13 +227,13 @@ class TransformerEncoderLayer(nn.Module):
         """
         residual = src
         if self.normalize_before:
-            src = self.norm1(src)
+            src = self.fullnorm1(self.norm1(src))
         src2 = self.self_attn(src, src, src, attn_mask=src_mask,
                               key_padding_mask=src_key_padding_mask)[0]
         src = residual + self.dropout1(src2)
         if not self.normalize_before:
-            src = self.norm1(src)
-        
+            src = self.fullnorm1(self.norm1(src))
+
         residual = src
         if self.normalize_before:
             src = self.norm2(src)
@@ -243,9 +246,9 @@ class TransformerEncoderLayer(nn.Module):
 
 class TransformerDecoderLayer(nn.Module):
     """
-    Modified from torch.nn.TransformerDecoderLayer. Add support of normalize_before, 
+    Modified from torch.nn.TransformerDecoderLayer. Add support of normalize_before,
     i.e., use layer_norm before the first block.
-    
+
     Args:
         d_model: the number of expected features in the input (required).
         nhead: the number of heads in the multiheadattention models (required).
@@ -364,7 +367,7 @@ class Conv2dSubsampling(nn.Module):
             nn.ReLU(),
         )
         self.out = nn.Linear(odim * (((idim - 1) // 2 - 1) // 2), odim)
-    
+
     def forward(self, x: Tensor) -> Tensor:
         """Subsample x.
 
@@ -441,7 +444,7 @@ class Noam(object):
     """
     Implements Noam optimizer. Proposed in "Attention Is All You Need", https://arxiv.org/pdf/1706.03762.pdf
     Modified from https://github.com/espnet/espnet/blob/master/espnet/nets/pytorch_backend/transformer/optimizer.py
-    
+
     Args:
         params (iterable): iterable of parameters to optimize or dicts defining parameter groups
         model_size: attention dimension of the transformer model
@@ -465,7 +468,7 @@ class Noam(object):
 
     def step(self):
         """Update parameters and rate."""
-        self._step += 1 
+        self._step += 1
         rate = self.rate()
         for p in self.optimizer.param_groups:
             p["lr"] = rate
@@ -547,7 +550,7 @@ class LabelSmoothingLoss(nn.Module):
             x: prediction of dimention (batch_size, input_length, number_of_classes).
             target: target masked with self.padding_id of dimention (batch_size, input_length).
 
-        Returns: 
+        Returns:
             torch.Tensor: scalar float value
         """
         assert x.size(2) == self.size
@@ -571,7 +574,7 @@ def encoder_padding_mask(supervision_segments: Optional[Tensor] = None) -> Optio
 
     Args:
         supervision_segments: Supervison in lhotse format, including 'sequence_idx',
-                            'start_frame', and 'num_frames'. 
+                            'start_frame', and 'num_frames'.
 
     Returns:
         Tensor: Mask tensor of dimension (batch_size, input_length), True denote the masked indices.
@@ -633,21 +636,21 @@ def get_normal_transcripts(supervision: Dict, words: k2.SymbolTable, oov: str = 
     Returns:
         List[List[int]]: List of concatenated transcripts, length is batch_size
     """
-    
+
     texts = [[token if token in words else oov
                   for token in text.split(' ')] for text in supervision['text']]
     texts_ids = [[words[token] for token in text] for text in texts]
 
 
     supervision_segments = [supervision['sequence_idx'], supervision['start_frame']]
-    
+
     indices = torch.argsort(supervision_segments[1], descending=False)
     supervision_segments = [z[indices] for z in supervision_segments]
     texts_ids = [texts_ids[indice] for indice in indices]
     indices = torch.argsort(supervision_segments[0], descending=False)
     supervision_segments = [z[indices] for z in supervision_segments]
     texts_ids = [texts_ids[indice] for indice in indices]
-    
+
     previous_idx = -1
     batch_text = []
     for sequence_idx, text in zip(supervision_segments[0], texts_ids):
@@ -663,7 +666,7 @@ def generate_square_subsequent_mask(sz: int) -> Tensor:
     """Generate a square mask for the sequence. The masked positions are filled with float('-inf').
         Unmasked positions are filled with float(0.0).
 
-    Args: 
+    Args:
         sz: mask size
 
     Returns:
