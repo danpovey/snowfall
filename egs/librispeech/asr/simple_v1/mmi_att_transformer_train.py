@@ -40,6 +40,11 @@ from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import get_phone_symbols
 
 
+def set_batch_idx(model: nn.Module, batch_idx: int):
+    for module in model.modules():
+        module.cur_batch_idx = batch_idx
+
+
 def get_tot_objf_and_num_frames(tot_scores: torch.Tensor,
                                 frames_per_seq: torch.Tensor
                                 ) -> Tuple[float, int, int]:
@@ -86,6 +91,8 @@ def get_objf(batch: Dict,
              tb_writer: Optional[SummaryWriter] = None,
              global_batch_idx_train: Optional[int] = None,
              optimizer: Optional[torch.optim.Optimizer] = None):
+    if global_batch_idx_train != None:
+        set_batch_idx(model, global_batch_idx_train)
     feature = batch['inputs']
     supervisions = batch['supervisions']
     supervision_segments = torch.stack(
@@ -465,7 +472,9 @@ def main():
 
     fix_random_seed(42)
 
+
     exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa')
+
     setup_logger('{}/log/log-train'.format(exp_dir))
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.tensorboard else None
 

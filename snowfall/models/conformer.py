@@ -15,6 +15,7 @@ from snowfall.common import get_texts
 from snowfall.models.transformer import Transformer, encoder_padding_mask
 
 
+
 class Conformer(Transformer):
     """
     Args:
@@ -33,14 +34,14 @@ class Conformer(Transformer):
 
     def __init__(self, num_features: int, num_classes: int, subsampling_factor: int = 4,
                  d_model: int = 256, nhead: int = 4, dim_feedforward: int = 2048,
-                 num_encoder_layers: int = 12, num_decoder_layers: int = 6, 
-                 dropout: float = 0.1, cnn_module_kernel: int = 31, 
+                 num_encoder_layers: int = 12, num_decoder_layers: int = 6,
+                 dropout: float = 0.1, cnn_module_kernel: int = 31,
                  normalize_before: bool = True) -> None:
         super(Conformer, self).__init__(num_features=num_features, num_classes=num_classes, subsampling_factor=subsampling_factor,
                  d_model=d_model, nhead=nhead, dim_feedforward=dim_feedforward,
                  num_encoder_layers=num_encoder_layers, num_decoder_layers=num_decoder_layers,
                  dropout=dropout, normalize_before=normalize_before)
-        
+
         self.encoder_pos = RelPositionalEncoding(d_model, dropout)
 
         encoder_layer = ConformerEncoderLayer(d_model, nhead, dim_feedforward, dropout, cnn_module_kernel, normalize_before)
@@ -112,7 +113,7 @@ class ConformerEncoderLayer(nn.Module):
         self.norm_ff_macaron = nn.LayerNorm(d_model)  # for the macaron style FNN module
         self.norm_ff = nn.LayerNorm(d_model)  # for the FNN module
         self.norm_mha = nn.LayerNorm(d_model)  # for the MHA module
-        
+
         self.ff_scale = 0.5
 
         self.norm_conv = nn.LayerNorm(d_model)  # for the CNN module
@@ -141,11 +142,14 @@ class ConformerEncoderLayer(nn.Module):
             S is the source sequence length, N is the batch size, E is the feature number
         """
 
+        s = get_scale_factor(self.cur_batch_idx,
+                             1000, 0.2, 1.0)
+
         # macaron style feed forward module
         residual = src
         if self.normalize_before:
             src = self.norm_ff_macaron(src)
-        src = residual + self.ff_scale * self.dropout(self.feed_forward_macaron(src))
+        src = residual + self.ff_scale * s * self.dropout(self.feed_forward_macaron(src))
         if not self.normalize_before:
             src = self.norm_ff_macaron(src)
 
@@ -155,7 +159,7 @@ class ConformerEncoderLayer(nn.Module):
             src = self.norm_mha(src)
         src_att = self.self_attn(src, src, src, pos_emb=pos_emb, attn_mask=src_mask,
                               key_padding_mask=src_key_padding_mask)[0]
-        src = residual + self.dropout(src_att)
+        src = residual + s * self.dropout(src_att)
         if not self.normalize_before:
             src = self.norm_mha(src)
 
@@ -163,7 +167,7 @@ class ConformerEncoderLayer(nn.Module):
         residual = src
         if self.normalize_before:
             src = self.norm_conv(src)
-        src = residual + self.dropout(self.conv_module(src))
+        src = residual + s * self.dropout(self.conv_module(src))
         if not self.normalize_before:
             src = self.norm_conv(src)
 
@@ -171,7 +175,7 @@ class ConformerEncoderLayer(nn.Module):
         residual = src
         if self.normalize_before:
             src = self.norm_ff(src)
-        src = residual + self.ff_scale * self.dropout(self.feed_forward(src))
+        src = residual + s * self.ff_scale * self.dropout(self.feed_forward(src))
         if not self.normalize_before:
             src = self.norm_ff(src)
 
@@ -324,7 +328,7 @@ class RelPositionMultiheadAttention(nn.Module):
         self.dropout = dropout
         self.head_dim = embed_dim // num_heads
         assert self.head_dim * num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
-  
+
         self.in_proj = nn.Linear(embed_dim, 3 * embed_dim, bias=True)
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=True)
 
@@ -575,14 +579,14 @@ class RelPositionMultiheadAttention(nn.Module):
             assert key_padding_mask.size(1) == src_len, "{} == {}".format(key_padding_mask.size(1), src_len)
 
 
-        q = q.transpose(0, 1)  # (batch, time1, head, d_k)  
+        q = q.transpose(0, 1)  # (batch, time1, head, d_k)
 
         n_batch_pos = pos_emb.size(0)
         p = self.linear_pos(pos_emb).view(n_batch_pos, -1, num_heads, head_dim)
         p = p.transpose(1, 2)  # (batch, head, 2*time1-1, d_k)
 
         q_with_bias_u = (q + self.pos_bias_u).transpose(1, 2) # (batch, head, time1, d_k)
-        
+
         q_with_bias_v = (q + self.pos_bias_v).transpose(1, 2) # (batch, head, time1, d_k)
 
         # compute attention score
@@ -700,7 +704,7 @@ class ConvolutionModule(nn.Module):
 
         x = self.pointwise_conv2(x) # (batch, channel, time)
 
-        return x.permute(2, 0, 1) 
+        return x.permute(2, 0, 1)
 
 
 class Swish(torch.nn.Module):
@@ -709,3 +713,16 @@ class Swish(torch.nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         """Return Swich activation function."""
         return x * torch.sigmoid(x)
+
+
+
+def get_scale_factor(cur_batch_idx: int,
+                     inflection_batch_idx: int,
+                     initial_value: float,
+                     inflection_value: float):
+    assert inflection_batch_idx > 0
+    if cur_batch_idx >= inflection_batch_idx:
+        return inflection_value
+    else:
+        return initial_value + \
+     (cur_batch_idx / inflection_batch_idx) * (inflection_value - initial_value)

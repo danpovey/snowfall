@@ -31,9 +31,13 @@ from snowfall.training.ctc_graph import build_ctc_topo
 from snowfall.training.mmi_graph import create_bigram_phone_lm
 from snowfall.training.mmi_graph import get_phone_symbols
 
+def set_batch_idx(model: torch.nn.Module, batch_idx: int):
+    for module in model.modules():
+        module.cur_batch_idx = batch_idx
 
 def decode(dataloader: torch.utils.data.DataLoader, model: AcousticModel,
            device: Union[str, torch.device], HLG: Fsa, symbols: SymbolTable):
+    set_batch_idx(model, 1000000)
     tot_num_cuts = len(dataloader.dataset.cuts)
     num_cuts = 0
     results = []  # a list of pair (ref_words, hyp_words)
@@ -207,6 +211,7 @@ def main():
     att_rate = args.att_rate
 
     exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa')
+
     setup_logger('{}/log/log-decode'.format(exp_dir), log_level='debug')
 
     # load L, G, symbol_table
