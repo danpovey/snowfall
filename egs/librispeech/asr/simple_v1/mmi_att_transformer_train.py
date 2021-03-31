@@ -718,7 +718,7 @@ def main():
                         global_batch_idx_train=global_batch_idx_train)
         epoch_info_filename = os.path.join(exp_dir, 'epoch-{}-info'.format(epoch))
         save_training_info(filename=epoch_info_filename,
-                           mdoel_path=model_path,
+                           model_path=model_path,
                            current_epoch=epoch,
                            learning_rate=curr_learning_rate,
                            objf=objf,
