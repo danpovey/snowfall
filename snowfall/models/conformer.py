@@ -143,7 +143,7 @@ class ConformerEncoderLayer(nn.Module):
         """
 
         s = get_scale_factor(self.cur_batch_idx,
-                             1000, 0.2, 1.0)
+                             2000, 0.2, 1.0)
 
         # macaron style feed forward module
         residual = src

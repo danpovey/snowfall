@@ -375,7 +375,7 @@ def get_parser():
     parser.add_argument(
         '--max-duration',
         type=int,
-        default=500.0,
+        default=250.0,
         help="Maximum pooled recordings duration (seconds) in a single batch.")
     parser.add_argument(
         '--warm-step',
@@ -386,7 +386,7 @@ def get_parser():
     parser.add_argument(
         '--accum-grad',
         type=int,
-        default=1,
+        default=2,
         help="Number of gradient accumulation.")
     parser.add_argument(
         '--den-scale',
