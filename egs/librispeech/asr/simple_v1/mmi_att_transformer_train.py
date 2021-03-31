@@ -473,7 +473,7 @@ def main():
     fix_random_seed(42)
 
 
-    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa')
+    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa-slowstart-16-0.75')
 
     setup_logger('{}/log/log-train'.format(exp_dir))
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.tensorboard else None
@@ -626,6 +626,8 @@ def main():
             num_features=80,
             nhead=args.nhead,
             d_model=args.attention_dim,
+            num_encoder_layers=16,
+            dim_feedforward=1536,
             num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
             subsampling_factor=4,
             num_decoder_layers=num_decoder_layers)
@@ -716,7 +718,7 @@ def main():
                         global_batch_idx_train=global_batch_idx_train)
         epoch_info_filename = os.path.join(exp_dir, 'epoch-{}-info'.format(epoch))
         save_training_info(filename=epoch_info_filename,
-                           model_path=model_path,
+                           mdoel_path=model_path,
                            current_epoch=epoch,
                            learning_rate=curr_learning_rate,
                            objf=objf,
