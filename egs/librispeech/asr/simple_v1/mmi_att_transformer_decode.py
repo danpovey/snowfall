@@ -175,7 +175,7 @@ def get_parser():
     parser.add_argument(
         '--max-duration',
         type=int,
-        default=1000.0,
+        default=500.0,
         help="Maximum pooled recordings duration (seconds) in a single batch.")
     parser.add_argument(
         '--avg',
@@ -240,8 +240,6 @@ def main():
             num_features=80,
             nhead=args.nhead,
             d_model=args.attention_dim,
-            num_encoder_layers=16,
-            dim_feedforward=1536,
             num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
             subsampling_factor=4,
             num_decoder_layers=num_decoder_layers)
@@ -250,6 +248,8 @@ def main():
             num_features=80,
             nhead=args.nhead,
             d_model=args.attention_dim,
+            num_encoder_layers=16,
+            dim_feedforward=1536,
             num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
             subsampling_factor=4,
             num_decoder_layers=num_decoder_layers)
