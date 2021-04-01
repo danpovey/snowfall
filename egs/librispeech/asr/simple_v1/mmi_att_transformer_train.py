@@ -473,7 +473,7 @@ def main():
     fix_random_seed(42)
 
 
-    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa-slowstart-16-0.75')
+    exp_dir = Path('exp-' + model_type + '-noam-mmi-att-musan-sa-slowstart-18-0.5')
 
     setup_logger('{}/log/log-train'.format(exp_dir))
     tb_writer = SummaryWriter(log_dir=f'{exp_dir}/tensorboard') if args.tensorboard else None
@@ -626,8 +626,8 @@ def main():
             num_features=80,
             nhead=args.nhead,
             d_model=args.attention_dim,
-            num_encoder_layers=16,
-            dim_feedforward=1536,
+            num_encoder_layers=18,
+            dim_feedforward=1024,
             num_classes=len(phone_ids) + 1,  # +1 for the blank symbol
             subsampling_factor=4,
             num_decoder_layers=num_decoder_layers)

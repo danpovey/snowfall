@@ -720,7 +720,7 @@ def get_scale_factor(cur_batch_idx: int,
                      inflection_batch_idx: int,
                      initial_value: float,
                      inflection_value: float):
-    global_scale = 0.75
+    global_scale = 0.5
 
     assert inflection_batch_idx > 0
     if cur_batch_idx >= inflection_batch_idx:
