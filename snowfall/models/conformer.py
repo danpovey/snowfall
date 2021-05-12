@@ -175,7 +175,7 @@ class ConformerEncoderLayer(nn.Module):
         src = residual + self.ff_scale * self.dropout(self.feed_forward(src))
         if not self.normalize_before:
             src = self.norm_ff(src)
-        
+
         if self.normalize_before:
             src = self.norm_final(src)
 
@@ -710,3 +710,209 @@ class Swish(torch.nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         """Return Swich activation function."""
         return x * torch.sigmoid(x)
+
+
+
+class BilinearCore(torch.nn.Module):
+    def __init__(dim: int, num_groups: int) -> None:
+        """
+        The core part of the implementation of a bilinear function from dim,dim->dim,
+        i.e. all the dimensions are the same. This is not a
+        general bilinear function, which would take dim^3 parameters, but a
+        bilinear function on groups of dimensions only.
+
+        Note: this function does not include a bias term or any linear
+        terms in the individual inputs; if you want those, it's easiest to
+        just ensure a bias in the original inputs is allowed, e.g. added
+        by previous modules.
+        """
+        self.dim = dim
+        self.num_groups = num_groups
+        assert dim % num_groups == 0
+        group_dim = dim // num_groups
+        self.weight = nn.Parameter(Tensor(num_groups, group_dim, group_dim, group_dim))
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        group_dim = self.weight.shape[1]
+        bound = 1.0 / group_dim  # you can read this as 1/sqrt(group_dim**2).
+        init.uniform_(self.weight, -bound, bound)
+
+    def forward(a: Tensor, b: Tensor) -> Tensor:
+        """
+        Forward function, from inputs of shape (...,dim) and (...,dim) to (...,dim)
+        where the dimensions represented as "..." are handled by normal broadcasting
+        semantics.
+        """
+        assert a.shape[-1] = self.dim
+        assert b.shape[-1] = self.dim
+        group_dim = self.dim // self.num_groups
+        ashape = list(a.shape[:-1]) + [ self.num_groups, group_dim ]
+        bshape = list(b.shape[:-1]) + [ self.num_groups, group_dim ]
+        a = a.contiguous().reshape(ashape)
+        b = b.contiguous().reshape(bshape)
+        ans = torch.einsum('...ik,...il,ijkl->...ij', a, b, self.weight)
+        ans_shape = list(ans.shape[:-2]) + [ self.dim ]
+        return ans.reshape(ans_shape)
+
+
+class Bilinear(torch.nn.Module):
+    def __init__(dim1: int,
+                 dim2: int,
+                 out_dim: int,
+                 hidden_dim: int,
+                 num_groups: int,
+                 bias1: bool = True,
+                 bias2: bool = True,
+                 bias_out: bool = True):
+        """
+        Bilinear function (plus, in general, bias and linear terms, so
+        we might call this a bi-affine function).  This is a function from
+          (..., dim1), (..., dim2) -> (..., out_dim), where the ... is
+        governed by broadcasting semantics.
+
+          dim1: Dimension (e.g. number of features) of 1st input
+          dim2: Dimension (e.g. number of features) of 2nd input
+          out_dim:  Dimension of output
+         hidden_dim:  A number which should ideally be larger than all of
+                dim1, dim2 and out_dim.
+         num_groups: A number which divides hidden_dim.  The number of
+                parameters in the core part of the bilinear function
+                equals nparam=(hidden_dim**3) // (num_groups**2), and since
+                hidden_dim may be fairly large we probably want this to
+                be no more than nparam==hidden_dim**2, implying that
+                num_groups**2 >= hidden_dim, e.g. if hidden_dim==256,
+                num_groups >= 16; or if hidden_dim==1024, num_groups >= 32
+                (in fact, num_groups==64 might be more advisable here, to
+                keep the core parameters equivalent to a 512*512 matrix).
+          bias1: If true allow a bias on the initial transform from input1;
+               advisable if input1 did not already have a trainable bias.
+          bias2: If true allow a bias on the initial transform from input2;
+               advisable if input2 did not already have a trainable bias.
+          bias_out:  If true, have a trainable bias on the output (this
+               may not really add modeling power, but might still be
+               useful due to learning dynamics).
+        """
+        assert dim1 > 0 and dim2 > 0 and out_dim > 0 and hidden_dim > 0
+        assert num_groups < hidden_dim and hidden_dim % num_groups == 0
+
+        self.linear1 = nn.Linear(dim1, hidden_dim, bias1)
+        self.linear2 = nn.Linear(dim2, hidden_dim, bias2)
+        self.core = BilinearCore(hidden_dim, num_groups)
+        self.linear_out = nn.Linear(hidden_dim, out_dim, bias_out)
+
+    def forward(self, x: Tensor, y: Tensor) -> Tensor:
+        x = self.linear1(x)
+        y = self.linear2(y)
+        return = self.linear_out(self.core(x, y))
+
+
+
+class Trilinear(torch.nn.Module):
+    def __init__(dim1: int,
+                 dim2: int,
+                 dim3: int,
+                 out_dim: int,
+                 hidden_dim: int,
+                 num_groups: int,
+                 bias1: bool = True,
+                 bias2: bool = True,
+                 linear2: bool = True,
+                 bias3: bool = True,
+                 linear3: bool = True,
+                 bias_out: bool = True):
+        """
+        Trilinear function (plus, in general, bias and linear and bilinear
+        terms are included if you have bias1=bias2=bias3=True, so we might
+        call this a tri-affine function).  This is a function from
+          (..., dim1), (..., dim2), (..., dim3) -> (..., out_dim), where
+        the ... is governed by broadcasting semantics.
+
+          dim1: Dimension (e.g. number of features) of 1st input
+          dim2: Dimension (e.g. number of features) of 2nd input
+          dim3: Dimension (e.g. number of features) of 3rd input
+          out_dim:  Dimension of output
+         hidden_dim:  A number which should ideally be larger than all of
+                dim1, dim2 and out_dim.
+         num_groups: A number which divides hidden_dim.  The number of
+                parameters in the core part of the bilinear function
+                equals nparam=(hidden_dim**3) // (num_groups**2), and since
+                hidden_dim may be fairly large we probably want this to
+                be no more than nparam==hidden_dim**2, implying that
+                num_groups**2 >= hidden_dim, e.g. if hidden_dim==256,
+                num_groups >= 16; or if hidden_dim==1024, num_groups >= 32
+                (in fact, num_groups==64 might be more advisable here, to
+                keep the core parameters equivalent to a 512*512 matrix).
+          bias1: If true allow a bias on the initial transform from input1;
+               advisable if input1 did not already have a trainable bias.
+          bias2: If true allow a bias on the initial transform from input2;
+               advisable if input2 did not already have a trainable bias.
+         linear2: If true include the nn.Linear module from input2 to
+               hidden_dim... if false, require that dim2 == hidden_dim
+               and bias2 == false.
+          bias3: If true allow a bias on the initial transform from input3;
+               advisable if input3 did not already have a trainable bias.
+         linear3: If true, include the linear function from input3 to
+               hidden_dim... if false, require that dim3 == hidden_dim
+               and bias3 == false.
+          bias_out:  If true, have a trainable bias on the output (this
+               may not really add modeling power, but might still be
+               useful due to learning dynamics).
+
+        Note on symmetries:
+          The arguments are not all symmetric because we process this
+         in two stages, first with a bilinear function on input1 and input2,
+         and then with a bilinear function between the result and input3.
+         We can show by giving the parameters special values that this
+         is at least as powerful as Bilinear() on any pair of the inputs
+         input1, input2 and input3.
+        """
+        assert dim1 > 0 and dim2 > 0 and dim3 > and out_dim > 0 and hidden_dim > 0
+        assert num_groups < hidden_dim and hidden_dim % num_groups == 0
+
+        self.linear1 = nn.Linear(dim1, hidden_dim, bias1)
+        if linear2:
+            self.linear2 = nn.Linear(dim2, hidden_dim, bias2)
+        else:
+            assert not bias2
+            assert dim2 == hidden_dim
+            self.register_parameter('linear2', None)
+        if linear3:
+            self.linear3 = nn.Linear(dim3, hidden_dim, bias3)
+        else:
+            assert not bias3
+            assert dim3 == hidden_dim
+            self.register_parameter('linear3', None)
+
+        self.core1 = BilinearCore(hidden_dim, num_groups)
+        self.core2 = BilinearCore(hidden_dim, num_groups)
+        self.linear_out = nn.Linear(hidden_dim, out_dim, bias_out)
+
+    def forward(self, x: Tensor, y: Tensor) -> Tensor:
+        x = self.linear1(x)
+        y = self.linear2(y)
+        return = self.linear_out(self.core(x, y))
+
+
+def test_bilinear_core():
+    dim = 256
+    num_groups = 8
+    m = BilinearCore(dim, num_groups)
+    B = 15
+    T = 200
+    f = torch.randn(B, T, 256)
+    g = torch.randn(B, T, 256)
+    h = m(f, g)
+    def stddev(x):
+        return ((x**2).sum() / x.numel()).sqrt().item()
+    print(f"Stddev of (f,g,h) is: {stddev(f)}, {stddev(g)}, {stddev(h)}")
+
+
+
+
+def main():
+    test_bilinear_core()
+
+
+if __name__ == '__main__':
+    main()
